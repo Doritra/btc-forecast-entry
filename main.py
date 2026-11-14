@@ -1,31 +1,34 @@
-#!/usr/bin/env python3
 """
-BTC Price Forecasting module.
-Forecasts BTC price ahead (e.g. 4 hours ahead) based on recent price trends and drift calculations.
+This module forecasts BTC prices (e.g. 4 hours ahead) based on historical per-minute prices and drift analysis.
 """
+
 import os
 import json
 
 def compute_forecast(prices, horizon_minutes):
-    """Compute the forecasted price given historical prices and horizon minutes."""
+    """
+    Computes the forecast price based on the given prices list and horizon minutes.
+    Algorithm:
+    - L = prices[-1]
+    - if length > 61: d60 = (L - prices[-61]) / 60 else d60 = 0
+    - if length > 31: d30 = (L - prices[-31]) / 30 else d30 = 0
+    - d = 0.5 * d30 + 0.5 * d60
+    - adjustment = d * horizon_minutes * 0.4
+    - clamp adjustment to at most 0.004 * L in absolute value
+    - forecast = L + adjustment
+    - Round the price to 5 decimals, clamp to (0.00001, 9999999.99999).
+    """
     if not prices:
         return 0.0
     
-    L = prices[-1]
     length = len(prices)
+    L = prices[-1]
     
-    if length > 61:
-        d60 = (L - prices[-61]) / 60.0
-    else:
-        d60 = 0.0
-        
-    if length > 31:
-        d30 = (L - prices[-31]) / 30.0
-    else:
-        d30 = 0.0
-        
-    # Blended per-minute drift based on 30-minute and 60-minute windows
+    d60 = (L - prices[-61]) / 60.0 if length > 61 else 0.0
+    d30 = (L - prices[-31]) / 30.0 if length > 31 else 0.0
+    
     d = 0.5 * d30 + 0.5 * d60
+    # Compute blended drift adjustment, clamp, and determine final forecast price
     adjustment = d * horizon_minutes * 0.4
     
     max_adj = 0.004 * L
@@ -35,28 +38,38 @@ def compute_forecast(prices, horizon_minutes):
         adjustment = -max_adj
         
     forecast = L + adjustment
-    forecast = round(forecast, 5)
-    forecast = max(0.00001, min(9999999.99999, forecast))
-    return forecast
+    rounded = round(forecast, 5)
+    
+    clamped = max(0.00001, min(9999999.99999, rounded))
+    return clamped
 
 def read_case(path):
+    """
+    Reads and parses a case JSON file using a context manager.
+    """
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def process_inputs():
+    """
+    Reads every *.in file in the input directory (env MAKEFUN_INPUT_DIR, default /input).
+    Computes forecasts and writes <case_id>.out to the output directory
+    (env MAKEFUN_OUTPUT_DIR, default /output) as JSON:
+    {"forecasts":[{"case":"<case id>","price":<number>}]} followed by a newline.
+    """
     input_dir = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     
-    if not os.path.isdir(input_dir):
+    if not os.path.exists(input_dir):
         return
         
     os.makedirs(out_dir, exist_ok=True)
     
     for filename in os.listdir(input_dir):
         if filename.endswith(".in"):
-            input_path = os.path.join(input_dir, filename)
+            in_path = os.path.join(input_dir, filename)
             try:
-                data = read_case(input_path)
+                data = read_case(in_path)
             except Exception:
                 continue
                 
@@ -68,25 +81,32 @@ def process_inputs():
             markets = data.get("markets", [])
             
             forecasts = []
-            for market in markets:
-                prices = market.get("prices", [])
-                forecast_price = compute_forecast(prices, horizon_minutes)
+            if markets:
+                for market in markets:
+                    prices = market.get("prices", [])
+                    price = compute_forecast(prices, horizon_minutes)
+                    forecasts.append({
+                        "case": case_id,
+                        "price": price
+                    })
+            else:
+                prices = data.get("prices", [])
+                price = compute_forecast(prices, horizon_minutes)
                 forecasts.append({
                     "case": case_id,
-                    "price": forecast_price
+                    "price": price
                 })
                 
-            output_data = {
+            out_data = {
                 "forecasts": forecasts
             }
             
-            output_path = os.path.join(out_dir, f"{case_id}.out")
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, ensure_ascii=False)
-                f.write("\n")  # Write trailing newline to output file
+            out_filename = f"{case_id}.out"
+            out_path = os.path.join(out_dir, out_filename)
+            
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(out_data, f)
+                f.write("\n") # Ensure trailing newline in output JSON file
 
 if __name__ == "__main__":
     process_inputs()
-
-# End of module
-# EOF
